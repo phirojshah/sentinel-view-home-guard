@@ -1,4 +1,6 @@
 
+import { s3Config, shouldUseMockData } from "@/config/s3Config";
+
 // This file would typically use the AWS SDK to interact with your S3 bucket
 // For this example, we'll simulate the API calls
 
@@ -65,23 +67,43 @@ const mockImages: ImageMetadata[] = [
 
 // Simulate fetching images from S3
 export const fetchImages = async (): Promise<ImageMetadata[]> => {
-  return new Promise((resolve) => {
-    // Simulate network delay
-    setTimeout(() => {
-      resolve(mockImages);
-    }, 1000);
-  });
+  // Check if we should use mock data based on configuration
+  if (shouldUseMockData()) {
+    return new Promise((resolve) => {
+      // Simulate network delay
+      setTimeout(() => {
+        resolve(mockImages);
+      }, 1000);
+    });
+  }
+
+  // For real S3 implementation (when useMockData is false)
+  // You would implement the AWS SDK code here
+  console.log(`Using S3 bucket: ${s3Config.bucketName} in region: ${s3Config.region}`);
+  
+  // This is a placeholder for the actual AWS SDK implementation
+  throw new Error("Real S3 implementation not yet available - set useMockData to true");
 };
 
 // Simulate deleting an image from S3
 export const deleteImage = async (imageId: string): Promise<boolean> => {
   console.log(`Deleting image with ID: ${imageId}`);
-  return new Promise((resolve) => {
-    // Simulate network delay
-    setTimeout(() => {
-      resolve(true);
-    }, 1000);
-  });
+  
+  if (shouldUseMockData()) {
+    return new Promise((resolve) => {
+      // Simulate network delay
+      setTimeout(() => {
+        resolve(true);
+      }, 1000);
+    });
+  }
+  
+  // For real S3 implementation (when useMockData is false)
+  // You would implement the AWS SDK code here
+  console.log(`Deleting from S3 bucket: ${s3Config.bucketName}`);
+  
+  // This is a placeholder for the actual AWS SDK implementation
+  throw new Error("Real S3 implementation not yet available - set useMockData to true");
 };
 
 // Format timestamp for display
