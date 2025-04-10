@@ -1,5 +1,5 @@
-
-import { s3Config, shouldUseMockData, areAWSCredentialsConfigured } from "@/config/s3Config";
+import { s3Config, shouldUseMockData, areAWSCredentialsConfigured, getS3BucketUrl } from "@/config/s3Config";
+import { S3Client, ListObjectsV2Command, DeleteObjectCommand } from "@aws-sdk/client-s3";
 
 // This file would typically use the AWS SDK to interact with your S3 bucket
 // For this example, we'll simulate the API calls
@@ -65,6 +65,19 @@ const mockImages: ImageMetadata[] = [
   }
 ];
 
+// Create an S3 client with the configured credentials
+const createS3Client = () => {
+  return new S3Client({
+    region: s3Config.region,
+    credentials: {
+      accessKeyId: s3Config.accessKeyId,
+      secretAccessKey: s3Config.secretAccessKey,
+    },
+    // Required to make S3 Client use the appropriate URL style for the bucket
+    forcePathStyle: false
+  });
+};
+
 // Simulate fetching images from S3
 export const fetchImages = async (): Promise<ImageMetadata[]> => {
   // Check if we should use mock data based on configuration
@@ -78,32 +91,75 @@ export const fetchImages = async (): Promise<ImageMetadata[]> => {
   }
 
   // For real S3 implementation (when useMockData is false)
-  // You would implement the AWS SDK code here
   if (!areAWSCredentialsConfigured()) {
     throw new Error("AWS credentials not configured. Please update the S3 configuration with your access keys.");
   }
-  
+
   console.log(`Using S3 bucket: ${s3Config.bucketName} in region: ${s3Config.region}`);
   console.log("AWS credentials configured:", areAWSCredentialsConfigured());
-  
-  // This is a placeholder for the actual AWS SDK implementation
-  // In a real implementation, you would use the AWS SDK with the configured credentials
-  // For example:
-  // const s3Client = new S3Client({
-  //   region: s3Config.region,
-  //   credentials: {
-  //     accessKeyId: s3Config.accessKeyId,
-  //     secretAccessKey: s3Config.secretAccessKey,
-  //   }
-  // });
-  
-  throw new Error("Real S3 implementation not yet available - set useMockData to true");
+
+  try {
+    const s3Client = createS3Client();
+
+    // List objects in the bucket
+    const command = new ListObjectsV2Command({
+      Bucket: s3Config.bucketName,
+      MaxKeys: 50 // Limit to 50 images
+    });
+
+    const response = await s3Client.send(command);
+
+    if (!response.Contents) {
+      console.log("No images found in the bucket");
+      return [];
+    }
+
+    // Map S3 objects to ImageMetadata format
+    const images: ImageMetadata[] = response.Contents.map((object, index) => {
+      const filename = object.Key || `image_${index}.jpg`;
+      const timestamp = object.LastModified?.toISOString() || new Date().toISOString();
+
+      return {
+        id: String(index + 1),
+        filename,
+        timestamp,
+        url: `${getS3BucketUrl()}/${encodeURIComponent(filename)}`,
+        size: formatFileSize(object.Size || 0),
+        source: filename.includes('_') ? filename.split('_')[0].replace(/([A-Z])/g, ' $1').trim() : 'Unknown'
+      };
+    });
+
+    return images;
+  } catch (error: unknown) {
+    console.error("Error fetching images from S3:", error);
+    // More detailed error handling
+    if (error instanceof Error) {
+      if (error.name === 'NoSuchBucket') {
+        throw new Error(`The bucket "${s3Config.bucketName}" does not exist`);
+      } else if (error.name === 'AccessDenied') {
+        throw new Error('Access denied. Check your AWS credentials and bucket permissions');
+      } else if (error.message && error.message.includes('CORS')) {
+        throw new Error('CORS error: Make sure CORS is configured for your S3 bucket');
+      } else {
+        throw error;
+      }
+    } else {
+      throw new Error('Unknown error occurred when fetching images from S3');
+    }
+  }
+};
+
+// Format file size
+const formatFileSize = (bytes: number): string => {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 };
 
 // Simulate deleting an image from S3
 export const deleteImage = async (imageId: string): Promise<boolean> => {
   console.log(`Deleting image with ID: ${imageId}`);
-  
+
   if (shouldUseMockData()) {
     return new Promise((resolve) => {
       // Simulate network delay
@@ -112,17 +168,51 @@ export const deleteImage = async (imageId: string): Promise<boolean> => {
       }, 1000);
     });
   }
-  
+
   // For real S3 implementation (when useMockData is false)
   if (!areAWSCredentialsConfigured()) {
     throw new Error("AWS credentials not configured. Please update the S3 configuration with your access keys.");
   }
-  
-  console.log(`Deleting from S3 bucket: ${s3Config.bucketName}`);
-  
-  // This is a placeholder for the actual AWS SDK implementation
-  // In a real implementation, you would use the AWS SDK here with your credentials
-  throw new Error("Real S3 implementation not yet available - set useMockData to true");
+
+  try {
+    // Find the image by ID to get the filename/key
+    const images = await fetchImages();
+    const imageToDelete = images.find(img => img.id === imageId);
+
+    if (!imageToDelete) {
+      throw new Error(`Image with ID ${imageId} not found`);
+    }
+
+    // Extract the key from the URL
+    const key = decodeURIComponent(imageToDelete.url.split('/').pop() || '');
+
+    const s3Client = createS3Client();
+    const command = new DeleteObjectCommand({
+      Bucket: s3Config.bucketName,
+      Key: key
+    });
+
+    await s3Client.send(command);
+    console.log(`Successfully deleted image ${key} from S3`);
+
+    return true;
+  } catch (error: unknown) {
+    console.error("Error deleting image from S3:", error);
+    // More detailed error handling
+    if (error instanceof Error) {
+      if (error.name === 'NoSuchBucket') {
+        throw new Error(`The bucket "${s3Config.bucketName}" does not exist`);
+      } else if (error.name === 'AccessDenied') {
+        throw new Error('Access denied. Check your AWS credentials and bucket permissions');
+      } else if (error.name === 'NoSuchKey') {
+        throw new Error(`The image "${imageId}" does not exist in the bucket`);
+      } else {
+        throw error;
+      }
+    } else {
+      throw new Error('Unknown error occurred when deleting image from S3');
+    }
+  }
 };
 
 // Format timestamp for display
